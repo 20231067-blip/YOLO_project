@@ -4,7 +4,7 @@ test: images/test
 nc: 2
 names:
   0: bicycle
-  1: humans
+  1: person
 roboflow:
   workspace: project-onkj7
   project: pedestrian-crosswalk-detection

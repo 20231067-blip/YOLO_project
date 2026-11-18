@@ -243,6 +243,13 @@ def main():
                 roi = list(map(float, roi))
         except (ValueError, KeyError, TypeError):
             roi = None
+        if roi is None:
+            print('횡단보도 영역을 자동으로 탐색합니다(색상 기반 추정).', flush=True)
+            roi = auto_detect_crosswalk_roi(frame)
+            if roi is not None:
+                print('횡단보도 영역 추정 완료. z 키로 수정할 수 있습니다.', flush=True)
+                roi_path.parent.mkdir(parents=True, exist_ok=True)
+                roi_path.write_text(json.dumps({'roi': roi}, indent=2), encoding='utf-8')
         if roi is None and not is_live:
             roi = select_roi(frame)
             if roi is None:
@@ -267,6 +274,7 @@ def main():
         last_fps = 0.0
         last_analysis_at = None
         last_sequence = 0
+        preview = None
         first_file_frame = True
         device_options = {'device': a.device} if a.device else {}
         cv2.namedWindow(TITLE, cv2.WINDOW_NORMAL)
@@ -274,40 +282,6 @@ def main():
         while True:
             # 일시 정지 중에도 입력 중단을 확인하고 캡처는 계속 진행합니다.
             packet = live_capture.latest(last_sequence) if live_capture else None
-    except (ValueError, KeyError, TypeError):
-        roi = None
-    if roi is None:
-        print('횡단보도 영역을 자동으로 탐색합니다...')
-        roi = auto_detect_crosswalk_roi(frame)
-        if roi is not None:
-            print('횡단보도 영역 자동 인식 완료!')
-        else:
-            print('자동 인식에 실패하여 수동 지정 창을 엽니다.')
-            roi = select_roi(frame)
-            if roi is None:
-                cap.release()
-                raise SystemExit('횡단보도 관심 영역이 필요합니다. 다시 실행하여 횡단보도를 지정하세요.')
-        roi_path.parent.mkdir(parents=True, exist_ok=True)
-        roi_path.write_text(json.dumps({'roi': roi}, indent=2), encoding='utf-8')
-    source_fps = cap.get(cv2.CAP_PROP_FPS)
-    source_fps = source_fps if np.isfinite(source_fps) and source_fps > 0 else 20.0
-    writer = None
-    if a.output:
-        out = Path(a.output)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        writer = cv2.VideoWriter(str(out), cv2.VideoWriter_fourcc(*'mp4v'), source_fps,
-                                 (frame.shape[1]*2, frame.shape[0]))
-        if not writer.isOpened():
-            cap.release()
-            raise SystemExit(f'영상 파일을 저장할 수 없습니다: {out}')
-    signal = 'UNKNOWN'
-    previous_inside = {}
-    crossing_until = red_until = 0.0
-    paused = False
-    last_fps = 0.0
-    cv2.namedWindow(TITLE, cv2.WINDOW_NORMAL)
-    try:
-        while ok:
             if not paused:
                 ready = True
                 captured_at = None
@@ -382,7 +356,7 @@ def main():
                 paused = not paused
                 last_analysis_at = None
                 last_fps = 0.0
-                if paused:
+                if paused and preview is not None:
                     paused_preview = preview.copy()
                     text_fit(paused_preview, '일시 정지 | p=실시간 분석 재개', 16, 35, .8, (0,220,255))
                     cv2.imshow(TITLE, paused_preview)
