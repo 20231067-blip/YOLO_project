@@ -53,8 +53,6 @@ def open_video_capture(source, camera_backend='auto'):
             if not cap.isOpened():
                 failures.append(f'{name}: 장치를 열지 못했습니다.')
                 continue
-            if is_camera or (isinstance(source, str) and '://' in source):
-                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             # 일부 카메라는 초기화 직후 빈 프레임을 반환하므로 잠시 기다립니다.
             deadline = time.monotonic() + 2.0
             while True:
