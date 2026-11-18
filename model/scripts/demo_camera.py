@@ -15,9 +15,9 @@ from PIL import Image, ImageDraw, ImageFont
 from ultralytics import YOLO
 
 if __package__:
-    from .video_source import resolve_video_path, open_video_capture
+    from .video_source import resolve_video_path, open_video_capture, LatestFrameCapture
 else:
-    from video_source import resolve_video_path, open_video_capture
+    from video_source import resolve_video_path, open_video_capture, LatestFrameCapture
 
 ROOT = Path(__file__).resolve().parents[1]
 TITLE = '우회전 보조 - 카메라 시연'
@@ -133,7 +133,8 @@ def text_fit(img, msg, x, y, font_scale, color, thick=2):
     img[y1:y2, x1:x2] = cv2.cvtColor(np.asarray(crop), cv2.COLOR_RGB2BGR)
 
 
-def draw_panel(height, width, signal, crossing, nearby, alert_hold, red_hold, last_fps):
+def draw_panel(height, width, signal, crossing, nearby, alert_hold, red_hold, last_fps,
+               live=False, frame_age_ms=0.0, roi_defined=True):
     signal_label = {'GREEN': '녹색', 'RED': '적색', 'UNKNOWN': '알 수 없음'}[signal]
     panel = np.full((height, width, 3), (30, 37, 44), dtype=np.uint8)
     if red_hold:
@@ -144,39 +145,48 @@ def draw_panel(height, width, signal, crossing, nearby, alert_hold, red_hold, la
         label, detail, color = '주의', '주변에서 보행자가 감지되었습니다', (0, 175, 255)
     else:
         label, detail, color = '확인 필요', '감지된 보행자가 없습니다', (125, 145, 150)
+    if not roi_defined and not nearby:
+        detail = '전체 화면에서 보행자를 분석 중입니다'
     base = min(width/620, height/720, 1.15)
     bar_top = max(60, round(height*.10))
     bar_bottom = min(height-1, bar_top+max(48, round(height*.11)))
     cv2.rectangle(panel, (12, bar_top), (width-12, bar_bottom), color, -1)
-    text_fit(panel, '우회전 보조 / 시연', 16, max(25,bar_top-18), .75*base, (245,245,245))
+    text_fit(panel, '카메라 실시간 분석' if live else '우회전 보조 / 시연', 16, max(25,bar_top-18), .75*base, (245,245,245))
     text_fit(panel, label, 23, bar_top+max(34,round((bar_bottom-bar_top)*.7)), 1.4*base, (255,255,255), 2)
     y = min(height-80, bar_bottom+44)
     text_fit(panel, detail, 16, y, .7*base, (245,245,245))
-    text_fit(panel, f'횡단 중: {crossing}명 | 주변 감지: {nearby}명', 16, y+35, .62*base, (235,235,235))
+    counts = (f'횡단 중: {crossing}명 | 주변 감지: {nearby}명' if roi_defined
+              else f'전체 화면 보행자: {nearby}명 | z=횡단보도 지정')
+    text_fit(panel, counts, 16, y+35, .62*base, (235,235,235))
     text_fit(panel, f'보행자 신호(수동): {signal_label}', 16, y+70, .6*base, (155,220,255))
-    text_fit(panel, f'미리보기 초당 프레임 수: {last_fps:.1f}', 16, y+105, .56*base, (180,210,220))
+    performance = f'분석: {last_fps:.1f} FPS'
+    if live:
+        performance += f' | 수신 후 {frame_age_ms:.0f} ms'
+    text_fit(panel, performance, 16, y+105, .56*base, (180,210,220))
     text_fit(panel, '운전자가 직접 횡단보도 상황을 확인해야 합니다.', 16, max(y+145, height-56), .55*base, (210,210,210), 1)
     text_fit(panel, 'g=녹색 r=적색 u=모름 z=영역 p=정지 q=종료', 16, height-18, .45*base, (190,190,190), 1)
     return panel
 
 
 def main():
-    p = argparse.ArgumentParser()
-    p.add_argument('--source', default='0', help='웹캠은 0, 그 외에는 파일 경로나 RTSP/HTTP 영상 주소를 지정합니다.')
-    p.add_argument('--model', default=str(ROOT / 'yolo11n.pt'), help='추가 학습한 best.pt 또는 기본 yolo11n.pt를 지정합니다.')
+    p = argparse.ArgumentParser(description='카메라 실시간 보행자 감지 및 추적')
+    p.add_argument('--source', default='0', help='웹캠 0, USB 카메라 1 또는 RTSP/HTTP 주소, 영상 파일 경로')
+    p.add_argument('--model', default=str(ROOT / 'yolo11n.pt'))
     p.add_argument('--conf', type=float, default=.3)
     p.add_argument('--imgsz', type=int, default=640)
-    p.add_argument('--roi-file', default=str(ROOT / 'config/crosswalk_roi.json'))
-    p.add_argument('--output', default='', help='영상 저장 시 사용할 MP4 파일 경로입니다(예: results.mp4).')
+    p.add_argument('--device', default='', help='비우면 자동 선택. CPU는 cpu, NVIDIA GPU는 0')
+    p.add_argument('--roi-file', default=None, help='횡단보도 영역 파일. 카메라와 영상은 기본 파일을 따로 사용합니다.')
+    p.add_argument('--output', default='', help='분석 화면을 MP4로 저장할 경로')
     p.add_argument('--max-width', type=int, default=1280)
     p.add_argument('--max-height', type=int, default=800)
-    p.add_argument('--camera-backend', choices=('auto', 'dshow', 'msmf'), default='auto',
-                   help='카메라 연결 방식입니다. auto는 Windows 연결 방식을 순서대로 시도합니다.')
-    p.add_argument('--check-camera', action='store_true',
-                   help='영상 입력 연결만 확인하고 모델 실행 없이 종료합니다.')
+    p.add_argument('--live-timeout', type=float, default=5.0, help='새 카메라 프레임 수신 제한 시간(초)')
+    p.add_argument('--camera-backend', choices=('auto', 'dshow', 'msmf'), default='auto')
+    p.add_argument('--check-camera', action='store_true', help='영상 입력 연결만 확인한 뒤 종료')
     a = p.parse_args()
-    if a.max_width < 1 or a.max_height < 1:
-        p.error('미리보기 너비와 높이는 0보다 커야 합니다.')
+    if a.max_width < 1 or a.max_height < 1 or a.imgsz < 1:
+        p.error('화면 크기와 분석 이미지 크기는 0보다 커야 합니다.')
+    if not np.isfinite(a.live_timeout) or a.live_timeout <= 0:
+        p.error('--live-timeout은 0보다 큰 유한한 값이어야 합니다.')
     if a.source.isdecimal():
         source = int(a.source)
     elif '://' in a.source:
@@ -186,113 +196,170 @@ def main():
             source = str(resolve_video_path(a.source))
         except FileNotFoundError as exc:
             p.error(str(exc))
+    is_live = isinstance(source, int) or '://' in str(source)
+    # 모델 준비를 끝낸 뒤 카메라를 엽니다.
+    if not a.check_camera:
+        model_path = Path(a.model).expanduser()
+        if not model_path.is_absolute() and not model_path.is_file() and (ROOT / model_path).is_file():
+            model_path = ROOT / model_path
+        model = YOLO(str(model_path))
+        names = model.names if isinstance(model.names, dict) else dict(enumerate(model.names))
+        people = [int(i) for i, v in names.items() if str(v).strip().lower() in ('person', 'pedestrian', 'people', 'human', 'humans')]
+        if not people:
+            p.error(f'모델에 사람 클래스가 없습니다: {names}')
     try:
         cap, frame = open_video_capture(source, a.camera_backend)
     except RuntimeError as exc:
         p.error(str(exc))
-    ok = True
-    if a.check_camera:
-        height, width = frame.shape[:2]
-        print(f'영상 입력 확인 완료: {width} x {height}')
-        cap.release()
-        return
-    model_path = Path(a.model).expanduser()
-    if not model_path.is_absolute() and not model_path.is_file() and (ROOT / model_path).is_file():
-        model_path = ROOT / model_path
-    model = YOLO(str(model_path))
-    names = model.names if isinstance(model.names, dict) else dict(enumerate(model.names))
-    people = [int(i) for i, v in names.items() if str(v).lower() in ('person', 'pedestrian', 'people')]
-    if not people:
-        raise SystemExit(f'모델에 사람 클래스가 없습니다: {names}')
-    roi_path = Path(a.roi_file)
+
+    live_capture = None
+    writer = None
+    window_created = False
     try:
-        roi = json.loads(roi_path.read_text(encoding='utf-8'))['roi'] if roi_path.exists() else None
-        if not (isinstance(roi, list) and len(roi) == 4 and all(0 <= float(v) <= 1 for v in roi)):
-            roi = None
-    except (ValueError, KeyError, TypeError):
-        roi = None
-    if roi is None:
-        print('횡단보도 영역을 자동으로 탐색합니다...')
-        roi = auto_detect_crosswalk_roi(frame)
-        if roi is not None:
-            print('횡단보도 영역 자동 인식 완료!')
+        if a.check_camera:
+            height, width = frame.shape[:2]
+            print(f'영상 입력 확인 완료: {width} x {height}')
+            return
+        source_fps = cap.get(cv2.CAP_PROP_FPS)
+        source_fps = source_fps if np.isfinite(source_fps) and source_fps > 0 else 20.0
+        if is_live:
+            live_capture = LatestFrameCapture(cap, frame, timeout=a.live_timeout)
+        if a.roi_file:
+            roi_path = Path(a.roi_file)
+        elif isinstance(source, int):
+            roi_path = ROOT / f'config/camera_{source}_roi.json'
+        elif is_live:
+            roi_path = ROOT / 'config/ip_roi.json'
         else:
-            print('자동 인식에 실패하여 수동 지정 창을 엽니다.')
+            roi_path = ROOT / 'config/crosswalk_roi.json'
+        try:
+            roi = json.loads(roi_path.read_text(encoding='utf-8'))['roi'] if roi_path.exists() else None
+            if not (isinstance(roi, list) and len(roi) == 4
+                    and all(np.isfinite(float(v)) and 0 <= float(v) <= 1 for v in roi)):
+                roi = None
+            elif float(roi[2]) <= 0 or float(roi[3]) <= 0:
+                roi = None
+            else:
+                roi = list(map(float, roi))
+        except (ValueError, KeyError, TypeError):
+            roi = None
+        if roi is None:
+            print('횡단보도 영역을 자동으로 탐색합니다(색상 기반 추정).', flush=True)
+            roi = auto_detect_crosswalk_roi(frame)
+            if roi is not None:
+                print('횡단보도 영역 추정 완료. z 키로 수정할 수 있습니다.', flush=True)
+                roi_path.parent.mkdir(parents=True, exist_ok=True)
+                roi_path.write_text(json.dumps({'roi': roi}, indent=2), encoding='utf-8')
+        if roi is None and not is_live:
             roi = select_roi(frame)
             if roi is None:
-                cap.release()
-                raise SystemExit('횡단보도 관심 영역이 필요합니다. 다시 실행하여 횡단보도를 지정하세요.')
-        roi_path.parent.mkdir(parents=True, exist_ok=True)
-        roi_path.write_text(json.dumps({'roi': roi}, indent=2), encoding='utf-8')
-    source_fps = cap.get(cv2.CAP_PROP_FPS)
-    source_fps = source_fps if np.isfinite(source_fps) and source_fps > 0 else 20.0
-    writer = None
-    if a.output:
-        out = Path(a.output)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        writer = cv2.VideoWriter(str(out), cv2.VideoWriter_fourcc(*'mp4v'), source_fps,
-                                 (frame.shape[1]*2, frame.shape[0]))
-        if not writer.isOpened():
-            cap.release()
-            raise SystemExit(f'영상 파일을 저장할 수 없습니다: {out}')
-    signal = 'UNKNOWN'
-    previous_inside = {}
-    crossing_until = red_until = 0.0
-    paused = False
-    last_fps = 0.0
-    cv2.namedWindow(TITLE, cv2.WINDOW_NORMAL)
-    try:
-        while ok:
+                raise RuntimeError('횡단보도 관심 영역을 지정해 주세요.')
+            roi_path.parent.mkdir(parents=True, exist_ok=True)
+            roi_path.write_text(json.dumps({'roi': roi}, indent=2), encoding='utf-8')
+        output_size = (frame.shape[1]*2, frame.shape[0])
+        if a.output:
+            out = Path(a.output)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            writer = cv2.VideoWriter(str(out), cv2.VideoWriter_fourcc(*'mp4v'), source_fps, output_size)
+            if not writer.isOpened():
+                raise RuntimeError(f'영상 파일을 저장할 수 없습니다: {out}')
+        if is_live:
+            print('실시간 분석 시작: q=종료, p=일시 정지, z=횡단보도 지정', flush=True)
+            if roi is None:
+                print('전체 화면의 보행자를 감지합니다. 횡단 여부를 분석하려면 z 키로 영역을 지정하세요.', flush=True)
+        signal = 'UNKNOWN'
+        previous_inside = {}
+        crossing_until = red_until = 0.0
+        paused = False
+        last_fps = 0.0
+        last_analysis_at = None
+        last_sequence = 0
+        preview = None
+        first_file_frame = True
+        device_options = {'device': a.device} if a.device else {}
+        cv2.namedWindow(TITLE, cv2.WINDOW_NORMAL)
+        window_created = True
+        while True:
+            # 일시 정지 중에도 입력 중단을 확인하고 캡처는 계속 진행합니다.
+            packet = live_capture.latest(last_sequence) if live_capture else None
             if not paused:
-                tick = time.monotonic()
-                height, width = frame.shape[:2]
-                x1r, y1r, x2r, y2r = pixel_roi(roi, width, height)
-                result = model.track(frame, persist=True, tracker='bytetrack.yaml',
-                                     classes=people, imgsz=a.imgsz, conf=a.conf, verbose=False)[0]
-                view = frame.copy()
-                cv2.rectangle(view, (x1r,y1r), (x2r,y2r), (255,185,0), 2)
-                text_fit(view, '횡단보도 영역', x1r, max(20,y1r-8), .6, (255,185,0))
-                boxes = result.boxes
-                n_crossing = n_nearby = 0
-                next_inside = {}
-                entered_red = False
-                if boxes is not None:
-                    ids = boxes.id.int().cpu().tolist() if boxes.id is not None else [None]*len(boxes)
-                    for box, ident in zip(boxes, ids):
-                        x1,y1,x2,y2 = map(int, box.xyxy[0].tolist())
-                        foot = ((x1+x2)//2, y2)
-                        inside = x1r <= foot[0] <= x2r and y1r <= foot[1] <= y2r
-                        n_crossing += inside
-                        n_nearby += not inside
-                        if ident is not None:
-                            if inside and previous_inside.get(ident) is False and signal == 'RED':
-                                entered_red = True
-                            next_inside[ident] = inside
-                        color = (30,70,240) if inside else (0,200,240)
-                        cv2.rectangle(view,(x1,y1),(x2,y2),color,2)
-                        cv2.circle(view,foot,4,color,-1)
-                        text_fit(view, f'{"영역 안" if inside else "보행자"} #{ident if ident is not None else "?"}',
-                                 max(2,x1),max(20,y1-7),.5,color)
-                previous_inside = next_inside
-                now = time.monotonic()
-                if n_crossing:
-                    crossing_until = now + 1.0
-                if entered_red:
-                    red_until = now + 1.0
-                elapsed = max(.0001, time.monotonic()-tick)
-                last_fps = .8*last_fps+.2*(1/elapsed) if last_fps else 1/elapsed
-                panel = draw_panel(height,width,signal,n_crossing,n_nearby,
-                                   now<crossing_until,now<red_until,last_fps)
-                display = np.hstack((view,panel))
-                if writer:
-                    writer.write(display)
-                preview, _ = fit(display,a.max_width,a.max_height)
-                cv2.imshow(TITLE, preview)
-            key = cv2.waitKey(0 if paused else 1) & 0xFF
-            if key == ord('q'):
+                ready = True
+                captured_at = None
+                if live_capture:
+                    ready = packet is not None
+                    if ready:
+                        last_sequence = packet.sequence
+                        frame, captured_at = packet.image, packet.captured_at
+                elif first_file_frame:
+                    first_file_frame = False
+                else:
+                    ok, frame = cap.read()
+                    if not ok or frame is None or not frame.size:
+                        break
+                if ready:
+                    height, width = frame.shape[:2]
+                    if writer and (width*2, height) != output_size:
+                        raise RuntimeError('입력 해상도가 변경되어 녹화를 종료합니다. 다시 실행하세요.')
+                    if roi is not None:
+                        x1r, y1r, x2r, y2r = pixel_roi(roi, width, height)
+                    result = model.track(frame, persist=True, tracker='bytetrack.yaml',
+                                         classes=people, imgsz=a.imgsz, conf=a.conf,
+                                         verbose=False, **device_options)[0]
+                    view = frame.copy()
+                    if roi is not None:
+                        cv2.rectangle(view, (x1r,y1r), (x2r,y2r), (255,185,0), 2)
+                        text_fit(view, '횡단보도 영역', x1r, max(20,y1r-8), .6, (255,185,0))
+                    boxes = result.boxes
+                    n_crossing = n_nearby = 0
+                    next_inside = {}
+                    entered_red = False
+                    if boxes is not None:
+                        ids = boxes.id.int().cpu().tolist() if boxes.id is not None else [None]*len(boxes)
+                        for box, ident in zip(boxes, ids):
+                            x1,y1,x2,y2 = map(int, box.xyxy[0].tolist())
+                            foot = ((x1+x2)//2, y2)
+                            inside = roi is not None and x1r <= foot[0] <= x2r and y1r <= foot[1] <= y2r
+                            n_crossing += inside
+                            n_nearby += not inside
+                            if ident is not None:
+                                if inside and previous_inside.get(ident) is False and signal == 'RED':
+                                    entered_red = True
+                                next_inside[ident] = inside
+                            color = (30,70,240) if inside else (0,200,240)
+                            cv2.rectangle(view,(x1,y1),(x2,y2),color,2)
+                            cv2.circle(view,foot,4,color,-1)
+                            text_fit(view, f'{"영역 안" if inside else "보행자"} #{ident if ident is not None else "?"}',
+                                     max(2,x1),max(20,y1-7),.5,color)
+                    previous_inside = next_inside
+                    now = time.monotonic()
+                    if n_crossing:
+                        crossing_until = now + 1.0
+                    if entered_red:
+                        red_until = now + 1.0
+                    if last_analysis_at is not None:
+                        fps = 1 / max(.0001, now - last_analysis_at)
+                        last_fps = .8*last_fps+.2*fps if last_fps else fps
+                    last_analysis_at = now
+                    frame_age_ms = (now - captured_at)*1000 if captured_at is not None else 0.0
+                    panel = draw_panel(height,width,signal,n_crossing,n_nearby,
+                                       now<crossing_until,now<red_until,last_fps,
+                                       live=is_live, frame_age_ms=frame_age_ms, roi_defined=roi is not None)
+                    display = np.hstack((view,panel))
+                    if writer:
+                        writer.write(display)
+                    preview, _ = fit(display,a.max_width,a.max_height)
+                    cv2.imshow(TITLE, preview)
+            key = cv2.waitKey(10 if paused else 1) & 0xFF
+            if key == ord('q') or cv2.getWindowProperty(TITLE, cv2.WND_PROP_VISIBLE) < 1:
                 break
             elif key == ord('p'):
                 paused = not paused
+                last_analysis_at = None
+                last_fps = 0.0
+                if paused and preview is not None:
+                    paused_preview = preview.copy()
+                    text_fit(paused_preview, '일시 정지 | p=실시간 분석 재개', 16, 35, .8, (0,220,255))
+                    cv2.imshow(TITLE, paused_preview)
             elif key == ord('g'):
                 signal = 'GREEN'
             elif key == ord('r'):
@@ -300,7 +367,9 @@ def main():
             elif key == ord('u'):
                 signal = 'UNKNOWN'
             elif key == ord('z'):
-                new_roi = select_roi(frame)
+                # 영역 선택 때만 의도적으로 한 프레임을 고정합니다.
+                latest = live_capture.latest() if live_capture else None
+                new_roi = select_roi(latest.image if latest is not None else frame)
                 if new_roi is not None:
                     roi = new_roi
                     roi_path.parent.mkdir(parents=True, exist_ok=True)
@@ -308,15 +377,21 @@ def main():
                     previous_inside.clear()
                     crossing_until = red_until = 0
                     paused = False
-            if not paused:
-                ok, frame = cap.read()
+                    last_analysis_at = None
+                    last_fps = 0.0
+    except KeyboardInterrupt:
+        pass
+    except RuntimeError as exc:
+        p.exit(1, f'{exc}\n')
     finally:
-        cap.release()
+        if live_capture:
+            live_capture.release()
+        else:
+            cap.release()
         if writer:
             writer.release()
-        cv2.destroyAllWindows()
-        if a.output:
-            print(f'저장 완료: {a.output}')
+        if window_created:
+            cv2.destroyAllWindows()
 
 
 if __name__ == '__main__':
