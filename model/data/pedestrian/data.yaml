@@ -1,5 +1,13 @@
 train: images/train
 val: images/val
 test: images/test
+nc: 2
 names:
-  0: person
+  0: bicycle
+  1: humans
+roboflow:
+  workspace: project-onkj7
+  project: pedestrian-crosswalk-detection
+  version: 2
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/project-onkj7/pedestrian-crosswalk-detection/dataset/2

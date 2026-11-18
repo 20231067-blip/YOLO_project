@@ -161,7 +161,7 @@ def main():
             model_path = ROOT / model_path
         model = YOLO(str(model_path))
         names = model.names if isinstance(model.names, dict) else dict(enumerate(model.names))
-        people = [int(i) for i, v in names.items() if str(v).lower() in ('person', 'pedestrian', 'people')]
+        people = [int(i) for i, v in names.items() if str(v).strip().lower() in ('person', 'pedestrian', 'people', 'human', 'humans')]
         if not people:
             p.error(f'모델에 사람 클래스가 없습니다: {names}')
     try:
