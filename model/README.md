@@ -1,7 +1,7 @@
 # RightTurn Weather + Camera (우회전 보행자 감지 연구·교육용 시제품)
 
 ## 1. 목표
-팀이 직접 촬영한 **주간 / 야간 / 우천 사진**으로 **YOLO11n 보행자 감지 모델을 추가 학습**한 뒤, **웹캠, USB 카메라, 동영상 또는 RTSP/IP 카메라**에 적용합니다. 별도의 관심 영역(ROI)과 객체 추적기로 경고 화면을 제어합니다. 직접 라벨을 작성한 이미지를 추가하기 전에는 모델의 추가 학습을 진행하지 않습니다.
+YOLO11n을 추가 학습하고 웹캠, USB 카메라, 영상 파일 또는 RTSP/IP 카메라에 적용하는 시연 프로젝트입니다. 현재 저장소의 Roboflow 이미지 61장과 라벨 61개를 model/data/pedestrian으로 가져왔습니다. 주간/야간/우천별 현장 데이터는 별도로 추가해야 합니다.
 
 **중요:** 보행자 신호는 **시연자가 수동으로 입력**합니다(`g`: 녹색, `r`: 적색, `u`: 알 수 없음). 적색 신호 진입은 법적 판단이 아닌 *의심 상황*입니다. 이 프로젝트는 **인증된 교통 안전 장치가 아니며**, 화면 표시를 우회전해도 된다는 허가로 해석해서는 안 됩니다.
 
@@ -16,51 +16,72 @@ pip install -r requirements.txt
 
 카메라 화면의 한글은 Pillow로 표시합니다. Windows에서는 기본 제공되는 맑은 고딕을 사용합니다. 다른 운영체제에서는 나눔고딕, Noto Sans CJK 또는 AppleGothic 글꼴이 필요합니다.
 
-## 3. 직접 데이터 수집 및 라벨 작성
+## 3. 학습 데이터
 
-원본 촬영 영상을 `data/raw/day`, `data/raw/night`, data/raw/rain에 저장합니다. **최종 카메라와 같은 고정 시점**에서 다양한 조명, 비, 반사, 우산 및 가림 상황을 촬영합니다. 촬영 동의를 받고, 식별 가능한 얼굴과 차량 번호판은 적절히 처리합니다. **학습 자료를 수집하기 위해 차도에 서거나 도로를 막지 마세요.**
+명령은 이 `model` 폴더에서 필요한 패키지가 설치된 Python 환경으로 실행합니다.
+원본 `pedestrian crosswalk detection.v2i.yolov11` 폴더는 보존하고 아래 구조로 복사했습니다.
+원본의 `valid` 분할은 `val`로 맞췄습니다.
 
-**프레임을 추출하기 전에 촬영 영상을 분할합니다.** 예를 들어 서로 다른 원본 촬영 회차나 장소를 학습용(`train`), 검증용(`val`), 시험용(`test`)으로 나눕니다. 같은 원본 영상의 인접 프레임이 서로 다른 데이터 묶음에 들어가지 않도록 합니다. 촬영 조건(주간/야간/우천)은 별도 기록으로 관리하며, **모든 사람은 클래스 0 person으로 표시**합니다. **사람이 없는 프레임**도 일부 포함하고 빈 라벨 파일을 만듭니다. 인도 위의 사람을 포함해 **보이는 모든 사람**에게 라벨을 작성합니다. 경계 상자는 횡단보도 관심 영역이 아니라 화면에 보이는 사람의 범위를 둘러싸야 합니다. CVAT 등의 라벨 작성 도구를 사용하고 **YOLO 객체 감지 형식**으로 내보냅니다. 야간과 우천은 사람의 클래스가 아닌 *촬영 조건*입니다.
+```text
+data/pedestrian/
+  data.yaml
+  images/train/   # 43장
+  images/val/     # 12장
+  images/test/    # 6장
+  labels/train/  # 43개
+  labels/val/    # 12개
+  labels/test/   # 6개
+```
 
-예시:
+클래스는 **0: bicycle, 1: humans**입니다. 사람을 0으로 바꾸면 자전거와 섞이므로 원본 번호를 유지합니다.
+YOLO 라벨 한 줄은 `클래스번호 중심_x 중심_y 너비 높이`이며 좌표는 0`1로 정규화합니다.
+객체가 없는 이미지는 같은 이름의 빈 `.txt` 파일을 둡니다.
+카메라 시연은 학습한 `humans`를 보행자로 추적하며 기본 COCO 모델의 `person`도 지원합니다.
+
+라이선스와 출처는 `data/pedestrian/SOURCE.md`, `README.dataset.txt`, `README.roboflow.txt`에 보존했습니다.
+학습 이미지와 라벨은 Git 제외 규칙을 제거해 소스트리에서 관리할 수 있습니다.
+원본 영상, `runs/`, 모델 `*.pt`, 라벨 캐시 `*.cache`는 계속 제외합니다.
+
+이 데이터는 61장의 소규모 샘플이며 파일명상 같은 영상의 프레임이 여러 분할에 포함됩니다.
+최종 성능은 독립된 촬영 영상 및 주간/야간/우천별 데이터로 평가해야 합니다.
+직접 데이터를 추가할 때는 촬영 영상 단위로 train/val/test를 먼저 분리하고 같은 클래스 정의로 라벨링하세요.
 
 ```powershell
 python scripts/extract_frames.py --video data/raw/night/night01.mp4 --out data/staging/night01 --every-sec 2
-python scripts/extract_frames.py --video data/raw/rain/rain01.mp4 --out data/staging/rain01 --every-sec 2
 ```
 
-라벨 작성 후 이미지와 확장자를 제외한 이름이 같은 `.txt` 라벨을 다음 위치에 저장합니다.
-
-```
-data/pedestrian/images/{train,val,test}/image01.jpg
-data/pedestrian/labels/{train,val,test}/image01.txt
-```
-
-객체 하나당 라벨 한 줄을 작성합니다. 다음은 형식을 설명하기 위한 표기이며, 실제 파일에는 다섯 개의 숫자를 입력합니다.
-
-```text
-0 중심_x 중심_y 너비 높이
-```
-
-좌표는 0~1 범위로 정규화하며, 이미지와 라벨 파일은 확장자를 제외한 이름이 같아야 합니다. data/pedestrian/data.yaml에서 사람 클래스 하나를 정의합니다. **라벨 작성이 끝나기 전에는 학습하지 마세요.** 사람이 없는 사진에도 빈 `.txt` 라벨 파일을 추가합니다.
-
-## 4. 데이터 검사 및 학습
+## 4. 데이터 검사 및 추가 학습
 
 ```powershell
+# 이미지 읽기, 라벨 대응, 클래스 및 좌표 검사
 python scripts/check_dataset.py
-# CPU에서 소규모로 실행을 확인합니다.
-python scripts/train.py --epochs 2 --batch 2 --device cpu --name smoke
-# 이후 전체 학습을 진행합니다(NVIDIA CUDA GPU 사용).
+
+# 학습하지 않고 학습 코드의 데이터 연결만 확인
+python scripts/train.py --check-only
+
+# CPU로 짧은 실행 확인
+python scripts/train.py --epochs 1 --batch 2 --imgsz 320 --device cpu --name dataset_smoke
+
+# NVIDIA GPU 환경이 준비된 경우 본 학습
 python scripts/train.py --epochs 40 --batch 8 --device 0 --name weather_person_v1
 ```
 
-기본값인 yolo11n.pt는 학습의 시작점으로 COCO 사전 학습 가중치를 내려받습니다. **추가 학습에는 팀이 직접 수집하고 라벨을 작성한 데이터셋을 사용**합니다. NVIDIA CUDA GPU가 없는 컴퓨터에서도 --device cpu로 실행할 수 있지만, 전체 학습은 오래 걸릴 수 있습니다. 학습된 최적 가중치는 runs/weather_person_v1/weights/best.pt에 저장됩니다. COCO의 80개 클래스 전체를 감지하려면 기본 가중치를 사용합니다. 사용자 데이터로 학습한 **단일 클래스** 모델은 person만 출력합니다.
+GPU가 없으면 본 학습에도 `--device cpu --batch 2`를 사용할 수 있지만 오래 걸릴 수 있습니다.
+기본 데이터는 `data/pedestrian/data.yaml`이고 다른 YAML은 `--data 경로/data.yaml`로 지정합니다.
+검사기는 `images/<분할>`, `labels/<분할>` 구조를 사용합니다.
+YAML의 `path`는 생략하거나 절대 경로로 지정하세요. 기본 설정에는 절대 경로가 없어 프로젝트를 옮겨도 동작합니다.
+기존 모델에서 더 학습하려면 `--weights 경로/best.pt`, 학습 그래프를 저장하려면 `--plots`를 추가합니다.
+
+완료 시 실제 결과 폴더가 출력됩니다. 같은 이름이 있으면 `weather_person_v12`처럼 새 이름이 만들어질 수 있습니다.
+아래는 본 학습 결과가 `runs/weather_person_v1`에 생성된 경우입니다.
 
 ```powershell
 python scripts/evaluate.py --weights runs/weather_person_v1/weights/best.pt
+python run_demo.py --source data/raw/crosswalk.mp4 --model runs/weather_person_v1/weights/best.pt
+python run_demo.py --source 0 --model runs/weather_person_v1/weights/best.pt
 ```
 
-시험용 데이터에는 학습에 사용하지 않은, 라벨이 있는 이미지가 있어야 합니다. 별도의 메타데이터 표나 보고서를 사용해 주간, 야간, 우천별 오류 사례를 평가합니다. 기본 모델과 추가 학습 모델은 **동일한 시험 이미지**로 비교합니다. COCO 기본 모델과 단일 클래스 사용자 모델은 클래스 번호 대응 관계가 다를 수 있으므로 지표 비교 설정을 확인합니다.
+`dataset_smoke`는 학습 연결을 확인하기 위한 모델이며 성능 검증을 마친 최종 모델이 아닙니다.
 
 ## 5. 카메라 실행
 
