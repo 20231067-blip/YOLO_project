@@ -2,6 +2,8 @@
 from pathlib import Path
 import os
 import time
+import threading
+from dataclasses import dataclass
 
 import cv2
 
@@ -51,6 +53,8 @@ def open_video_capture(source, camera_backend='auto'):
             if not cap.isOpened():
                 failures.append(f'{name}: 장치를 열지 못했습니다.')
                 continue
+            if is_camera or (isinstance(source, str) and '://' in source):
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             # 일부 카메라는 초기화 직후 빈 프레임을 반환하므로 잠시 기다립니다.
             deadline = time.monotonic() + 2.0
             while True:
@@ -79,3 +83,67 @@ def open_video_capture(source, camera_backend='auto'):
             '3. 일반 카메라와 적외선 카메라가 함께 있으면 --source 1도 확인하세요.'
         )
     raise RuntimeError(f'카메라 또는 영상을 열거나 첫 프레임을 읽을 수 없습니다: {source}')
+
+
+@dataclass(frozen=True)
+class LiveFrame:
+    sequence: int
+    image: object
+    captured_at: float
+
+
+class LatestFrameCapture:
+    """계속 수신한 영상 중 가장 최근 프레임 하나만 보관합니다.
+
+    캡처 스레드만 read/release를 호출합니다. 시간은 센서 시간이 아닌
+    OpenCV 수신 완료 시점입니다.
+    """
+
+    def __init__(self, capture, first_frame, timeout=5.0):
+        if timeout <= 0:
+            raise ValueError('실시간 입력 제한 시간은 0보다 커야 합니다.')
+        self._capture = capture
+        self._timeout = timeout
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._frame = LiveFrame(1, first_frame, time.monotonic())
+        self._error = None
+        self._thread = threading.Thread(target=self._run, name='camera-capture', daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        try:
+            while not self._stop.is_set():
+                ok, image = self._capture.read()
+                now = time.monotonic()
+                if ok and image is not None and image.size:
+                    with self._lock:
+                        self._frame = LiveFrame(self._frame.sequence + 1, image, now)
+                else:
+                    with self._lock:
+                        expired = now - self._frame.captured_at > self._timeout
+                    if expired:
+                        raise RuntimeError('카메라 영상 수신이 끊겼습니다. 연결 상태를 확인하고 다시 실행하세요.')
+                    self._stop.wait(.02)
+        except Exception as exc:
+            with self._lock:
+                self._error = str(exc)
+        finally:
+            self._capture.release()
+
+    def latest(self, after_sequence=0):
+        """새 프레임만 반환하고 입력 중단 시 오래된 결과를 재사용하지 않습니다."""
+        with self._lock:
+            if self._error:
+                raise RuntimeError(f'실시간 영상 입력 오류: {self._error}')
+            if time.monotonic() - self._frame.captured_at > self._timeout:
+                raise RuntimeError('카메라의 새 영상이 도착하지 않습니다. 연결 상태를 확인하세요.')
+            if self._frame.sequence <= after_sequence:
+                return None
+            return self._frame
+
+    def release(self):
+        self._stop.set()
+        # read가 멈춰도 UI 종료를 오래 막지 않습니다. 실제 release는
+        # read가 반환된 뒤 캡처 스레드에서 수행합니다.
+        self._thread.join(timeout=1.0)

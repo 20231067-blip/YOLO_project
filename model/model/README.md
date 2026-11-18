@@ -62,53 +62,69 @@ python scripts/evaluate.py --weights runs/weather_person_v1/weights/best.pt
 
 시험용 데이터에는 학습에 사용하지 않은, 라벨이 있는 이미지가 있어야 합니다. 별도의 메타데이터 표나 보고서를 사용해 주간, 야간, 우천별 오류 사례를 평가합니다. 기본 모델과 추가 학습 모델은 **동일한 시험 이미지**로 비교합니다. COCO 기본 모델과 단일 클래스 사용자 모델은 클래스 번호 대응 관계가 다를 수 있으므로 지표 비교 설정을 확인합니다.
 
-## 5. 카메라 실행
+## 5. 카메라 실시간 분석
 
-현재 제공된 영상은 data/raw/crosswalk.mp4에 있습니다. Windows에서는 프로젝트 폴더에서 다음 명령을 실행하면 SSL과 필수 패키지가 정상인 파이썬 환경을 찾아 실행합니다.
+프로젝트의 `model` 폴더에서 실행합니다. 기본 입력은 내장 카메라(`0`)입니다.
+사진을 찍는 방식이 아니라, 카메라 영상을 계속 받아 YOLO로 보행자를 감지·추적합니다.
 
 ```powershell
 python run_demo.py
+# USB 카메라: 장치 번호에 따라 1, 2 등으로 변경
+python run_demo.py --source 1
+# IP 카메라: 접근 권한이 있는 실제 스트림 주소 사용
+python run_demo.py --source "rtsp://USERNAME:PASSWORD@HOST:554/stream" --roi-file config/ip_roi.json
 ```
 
-VS Code에서는 실행 및 디버그에서 **횡단보도 영상 실행**을 선택할 수 있습니다. 기본 모델은 프로젝트 폴더의 yolo11n.pt를 읽습니다. 모델을 처음 내려받을 때 SSL 모듈 관련 오류가 발생하면 파이썬 환경 문제이므로 SSL이 정상인 환경으로 실행하세요.
+VS Code 실행 및 디버그에서 **카메라 실시간 분석**을 선택할 수도 있습니다.
+실행기는 필요한 패키지가 설치된 `.venv`, 활성 환경, 기존 `yolo_project` 환경 등을 찾습니다.
+기본 모델은 `yolo11n.pt`이며, 추가 학습한 모델은 `--model 경로/best.pt`로 지정합니다.
 
+- 처음 연결한 카메라는 **전체 화면에서 즉시 보행자 감지**를 시작합니다.
+- 횡단보도 안에 있는지 구분하려면 **z**를 누르고 영역을 드래그한 뒤 Enter로 확정합니다.
+  영역을 지정하는 동안에만 화면 한 장을 고정합니다. C로 취소하면 기존 분석을 이어갑니다.
+- 카메라 영역은 `config/camera_0_roi.json`처럼 장치별로 저장하며, 영상 파일의 영역과 분리합니다.
+  카메라 위치나 촬영 각도가 바뀌면 z로 다시 지정하세요. IP 카메라마다 다른 `--roi-file`을 사용하세요.
+- **p**는 분석 일시 정지/재개, **q** 또는 창 닫기는 종료입니다.
+  일시 정지 중에도 카메라를 계속 읽으므로 재개하면 현재 시점부터 분석합니다.
+- **g / r / u**는 보행자 신호를 녹색 / 적색 / 알 수 없음으로 수동 설정합니다.
 
-영상의 상대 경로는 현재 실행 폴더, 프로젝트 폴더, data/raw 폴더, scripts 폴더 순서로 찾습니다. 파일이 없으면 확인한 경로를 오류 메시지로 보여 줍니다. `data/raw/crosswalk.mp4`는 프로젝트 폴더에서 다음 명령으로 실행할 수 있습니다.
+카메라 수신을 별도 스레드에서 계속 처리하고 **최신 프레임 하나만** 분석에 전달합니다.
+분석이 카메라보다 느리면 중간 프레임을 건너뛰어 오래된 영상이 밀리지 않도록 합니다.
+화면에는 분석 FPS와 **프레임 수신 후 분석까지 걸린 시간**을 표시합니다.
+이 시간에는 카메라 내부나 네트워크에서 발생한 지연은 포함되지 않습니다.
+실제 분석 속도는 컴퓨터와 모델에 따라 달라지며, 느릴 때는 분석 크기를 줄일 수 있습니다.
 
 ```powershell
-python scripts/demo_camera.py --source data/raw/crosswalk.mp4
+python run_demo.py --imgsz 416
+# NVIDIA GPU 사용 환경이 준비된 경우
+python run_demo.py --device 0
+# CPU로 실행
+python run_demo.py --device cpu
 ```
 
+새 프레임이 5초 이상 도착하지 않거나 입력 오류가 나면 오류를 표시하고 종료합니다.
+시간은 `--live-timeout 10`처럼 조정할 수 있습니다. 연결을 복구한 뒤 다시 실행하세요.
+Windows 카메라 앱이나 화상회의 앱이 장치를 사용 중이면 먼저 종료하세요.
 
 ```powershell
-# 노트북 내장 카메라
-python scripts/demo_camera.py --source 0 --model runs/weather_person_v1/weights/best.pt
-# USB 카메라는 장치 번호가 1일 수 있습니다.
-python scripts/demo_camera.py --source 1 --model runs/weather_person_v1/weights/best.pt --roi-file config/usb_roi.json
-# 동영상 파일
-python scripts/demo_camera.py --source data/raw/day/day01.mp4 --model runs/weather_person_v1/weights/best.pt --roi-file config/video_roi.json
-# RTSP 카메라(접근 권한이 있는 실제 주소를 사용하세요).
-python scripts/demo_camera.py --source "rtsp://USERNAME:PASSWORD@HOST:554/stream" --model runs/weather_person_v1/weights/best.pt --roi-file config/ip_roi.json
-```
-
-시작할 때 횡단보도를 사각형으로 지정하고 Enter 키로 확정합니다. 관심 영역은 --roi-file로 지정한 파일에 정규화된 좌표로 저장됩니다. **z** 키로 다시 지정할 수 있습니다. 카메라나 촬영 각도가 다르면 **서로 다른 관심 영역 파일을 사용**합니다. 미리보기는 크기를 조절하지만 감지는 원본 프레임에서 수행합니다. --output recorded.mp4를 지정하면 표시 화면을 원래 해상도로 저장할 수 있습니다. **RTSP 접속 정보나 촬영 영상을 GitHub에 올리지 마세요.**
-
-
-### 노트북 내장 카메라 연결
-
-Windows 카메라 앱과 화상회의 앱을 종료한 뒤 프로젝트 폴더에서 실행합니다.
-
-```powershell
-python run_demo.py --source 0 --roi-file config/webcam_roi.json
-```
-
-Windows에서는 DirectShow, Media Foundation, 기본 연결 방식을 순서대로 시도합니다. 연결 확인만 하려면 다음 명령을 사용합니다.
-
-```powershell
+# 연결 확인만 수행 (실시간 분석은 하지 않음)
 python run_demo.py --source 0 --check-camera
+# 특정 Windows 연결 방식 선택
+python run_demo.py --source 0 --camera-backend dshow
 ```
 
-특정 연결 방식은 --camera-backend dshow 또는 --camera-backend msmf로 지정합니다. 일반 카메라와 적외선 카메라의 장치 번호가 다르면 --source 1도 확인합니다. 카메라 앱은 정상인데 파이썬만 실패할 경우 Windows의 카메라 설정에서 데스크톱 앱의 카메라 접근 허용 여부를 확인합니다.
+저장된 영상 분석도 사용할 수 있습니다. 영상 파일은 프레임을 순서대로 처리합니다.
+
+```powershell
+python run_demo.py --source data/raw/crosswalk.mp4
+python run_demo.py --source data/raw/crosswalk.mp4 --output recorded.mp4
+```
+
+`--output`을 지정했을 때만 분석 화면을 동영상으로 저장합니다.
+저장 FPS는 입력 영상의 FPS를 사용하므로, 실시간 분석 FPS가 낮으면 저장 영상의 재생 시간은 실제 경과 시간보다 짧아질 수 있습니다.
+Windows에서 카메라 접근이 차단되면 설정 > 개인정보 및 보안 > 카메라에서 데스크톱 앱 접근 허용을 확인하세요.
+다른 운영체제에서는 한글 표시를 위해 나눔고딕, Noto Sans CJK 또는 AppleGothic이 필요합니다.
+RTSP 접속 정보와 촬영 영상을 GitHub에 올리지 마세요.
 
 ## 6. 권장 시험 사례
 

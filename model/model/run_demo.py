@@ -1,4 +1,4 @@
-"""필수 패키지와 SSL이 정상인 파이썬 환경으로 횡단보도 영상을 실행합니다."""
+"""필수 패키지와 SSL이 정상인 파이썬 환경으로 카메라 실시간 분석을 실행합니다."""
 import os
 from pathlib import Path
 import shutil
@@ -44,7 +44,7 @@ def main():
     print(f'사용할 파이썬: {demo_python}', flush=True)
     command = [
         str(demo_python), '-B', str(ROOT / 'scripts/demo_camera.py'),
-        '--source', str(ROOT / 'data/raw/crosswalk.mp4'),
+        '--source', '0',
         '--model', str(ROOT / 'yolo11n.pt'), *sys.argv[1:],
     ]
     return subprocess.call(command)
