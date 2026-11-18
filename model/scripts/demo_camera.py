@@ -44,7 +44,50 @@ def select_roi(frame):
             max(0., min(1., y / ratio / fh)),
             max(0., min(1., w / ratio / fw)),
             max(0., min(1., h / ratio / fh))]
+def auto_detect_crosswalk_roi(frame):
+    #프레임 하단부에서 흰색 횡단보도 줄무늬(얼룩말 패턴) 영역을 자동으로 찾아 정규화 좌표를 반환
+    fh, fw = frame.shape[:2]
+    # 하늘이나 상단 배경 오탐지를 막기 위해 화면의 아래쪽 65% 영역만 탐색
+    y_offset = int(fh * 0.35)
+    roi_search = frame[y_offset:, :]
 
+    # 1. 밝은 흰색 영역 추출 -> HSV 명도 V가 높고 채도 S가 낮은 영역
+    hsv = cv2.cvtColor(roi_search, cv2.COLOR_BGR2HSV)
+    lower_white = np.array([0, 0, 180])
+    upper_white = np.array([180, 60, 255])
+    mask = cv2.inRange(hsv, lower_white, upper_white)
+
+    # 2. 노이즈 제거 및 떨어진 흰색 줄무늬들을 하나의 횡단보도 덩어리로 묶기(Morphology)
+    kernel_clean = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel_clean)
+    
+    # 가로 방향으로 넓게 팽창시켜 여러 개의 횡단보도 막대를 하나의 영역으로 연결
+    kernel_merge = cv2.getStructuringElement(cv2.MORPH_RECT, (max(25, fw // 15), 15))
+    merged = cv2.dilate(mask, kernel_merge, iterations=2)
+
+    # 3. 가장 큰 덩어리(횡단보도 후보) 찾기
+    contours, _ = cv2.findContours(merged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    best_rect = None
+    max_area = (fw * fh) * 0.03  # 전체 화면의 최소 3% 이상 크기만 인정
+
+    for cnt in contours:
+        x, y, w, h = cv2.boundingRect(cnt)
+        area = w * h
+        # 가로가 세로보다 긴 형태(횡단보도 특성) 우선 선택
+        if area > max_area and w > h * 1.2:
+            max_area = area
+            best_rect = (x, y + y_offset, w, h)
+
+    if best_rect is None:
+        return None
+
+    x, y, w, h = best_rect
+    return [
+        max(0.0, min(1.0, x / fw)),
+        max(0.0, min(1.0, y / fh)),
+        max(0.0, min(1.0, w / fw)),
+        max(0.0, min(1.0, h / fh)),
+    ]
 
 def pixel_roi(norm, width, height):
     x, y, w, h = norm
@@ -169,10 +212,16 @@ def main():
     except (ValueError, KeyError, TypeError):
         roi = None
     if roi is None:
-        roi = select_roi(frame)
-        if roi is None:
-            cap.release()
-            raise SystemExit('횡단보도 관심 영역이 필요합니다. 다시 실행하여 횡단보도를 지정하세요.')
+        print('횡단보도 영역을 자동으로 탐색합니다...')
+        roi = auto_detect_crosswalk_roi(frame)
+        if roi is not None:
+            print('횡단보도 영역 자동 인식 완료!')
+        else:
+            print('자동 인식에 실패하여 수동 지정 창을 엽니다.')
+            roi = select_roi(frame)
+            if roi is None:
+                cap.release()
+                raise SystemExit('횡단보도 관심 영역이 필요합니다. 다시 실행하여 횡단보도를 지정하세요.')
         roi_path.parent.mkdir(parents=True, exist_ok=True)
         roi_path.write_text(json.dumps({'roi': roi}, indent=2), encoding='utf-8')
     source_fps = cap.get(cv2.CAP_PROP_FPS)
