@@ -29,15 +29,14 @@ Q1. test 할 때, 어떻게 할 것인가?
 A1. 실시간으로 보여주는게 가장 좋은 방법이나, 야외촬영이 필요하기때문에 야외에서 테스트하는 장변을 촬영해서 발표할 것. 
 
 -- 데이터셋 수집 사이트 -- 
-1. AI Hub
-한국 도로 및 횡단보도 데이터 수집에 적합, 국내 도로 환경을 반영하기 좋음
-
+1. GitHub
+객체 탐지에 사용된 YOLO모델, 다양한 객체들을 탐지할 수 있게 학습된 모델 중 person클래스 선택 및 사용
+참고 GitHub 링크 : https://github.com/ultralytics/assets/releases/tag/v8.3.0
 2. Roboflow Universe
-다른 사람들이 만든 라벨링 데이터셋 활용, YOLO 학습용 데이터로 활용하기 편리
-추가 데이터셋 링크 : https://universe.roboflow.com/project/pedestrian-crosswalk-detection/dataset/2
+야간 보행자 라벨링 데이터셋 활용, YOLO 학습용 데이터로 활용하기 편리
+사용 데이터셋 링크 : https://universe.roboflow.com/project/pedestrian-crosswalk-detection/dataset/2
 
-3. Kaggle
-다양한 횡단보도 이미지 데이터셋, CSV, 이미지, YOLO 형식 등 다양한 자료
+
 
 ### 2. 실시간 웹캠 시연 실행
 
@@ -80,7 +79,7 @@ python scripts/demo_camera.py --source 0 --camera-backend msmf --check-camera
 
 | 이름 | 담당 역할 | 주요 수행 업무 |
 | --- | --- | --- |
-| **지호** | 데이터 구축 & 시스템 테스트 | Roboflow 데이터셋 수집·전처리, Git 협업 관리, 실시간 웹캠 연동 테스트 및 발표 |
+| **한지호** | 데이터 구축 & 시스템 테스트 | Roboflow 데이터셋 수집·전처리, Git 협업 관리, 실시간 웹캠 연동 테스트 및 발표 |
 | **이여준** | AI 모델링 & 알고리즘 구현 |   "YOLOv11 모델 학습·평가, 실시간 카메라 연결 및 사람 추적 알고리즘 구현
 | **김아정** | 인터페이스 & 시각화 설계   |   운전자 경고 전광판 인터페이스 설계 및 경고 알고리즘 구현  |
 
@@ -112,7 +111,7 @@ python scripts/demo_camera.py --source 0 --camera-backend msmf --check-camera
 1. **실시간 카메라 연동**: Windows 카메라 백엔드(`DirectShow`, `Media Foundation`) 자동 연결 및 실시간 웹캠 피드 송출 구현
 2. **시각화 및 경고 알고리즘 작성**:
 * 실시간 영상 송출과 함께 횡단보도(ROI) 내부 보행자 진입 판별 로직 적용
-* 상태별(`경고` / `주의` / `확인 필요`) 경고등 전광판 UI 패널 구현
+* 상태별(`경고` / `주의`) 경고등 전광판 UI 패널 구현
 
 
 
@@ -121,3 +120,11 @@ python scripts/demo_camera.py --source 0 --camera-backend msmf --check-camera
 1. **횡단보도 자동 인식 알고리즘**: 현재 수동 영역 지정(ROI) 방식에서 나아가, 횡단보도 영역을 자동으로 인식하는 알고리즘 적용 및 고도화
 2. **시각화 개선**: 운전자가 주행 중 한눈에 위험 상황을 파악할 수 있도록 더욱 직관적이고 깔끔한 시각화 화면 구현
 
+---
+
+### Week 3 진행상황
+1. 횡단보도 자동인식 & 원할 경우 수동인식 가능
+2. 경고 인터페이스 완성
+
+### Week 4 계획
+1. 최종 테스트 영상 촬영
